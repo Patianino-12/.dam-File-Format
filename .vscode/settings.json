@@ -4,5 +4,8 @@
     "files.associations": {
         "*.css": "tailwindcss"
     },
-    "css.customData": [".vscode/tailwind.json"]
+    "css.customData": [".vscode/tailwind.json"],
+    "json.schemas": [],
+    "json.schemaDownload.enable": false,
+    "http.proxyStrictSSL": false
 }
