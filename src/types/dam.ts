@@ -1,66 +1,164 @@
+import { deflate, inflate } from 'pako';
+import { sha256 } from '../utils/crypto.ts';
+
+// ── Types ──
+
 export interface DamAttachment {
     name: string;
     type: string;
-    data: string; // base64
+    data: string; // base64 (may be gzipped)
     size: number;
+    checksum: string; // sha256 of original data
+    compressed: boolean;
+}
+
+export interface DamHistoryEntry {
+    timestamp: string;
+    action: string; // "created" | "edited" | "attachment_added" | etc.
+    summary: string;
 }
 
 export interface DamFile {
     title: string;
     author: string;
     created: string;
+    modified: string;
     version: string;
+    tags: string[];
+    description: string;
     body: string;
+    checksum: string; // computed on save
+    encrypted: boolean;
     attachments: DamAttachment[];
+    history: DamHistoryEntry[];
 }
 
-export const DEFAULT_DAM_FILE: DamFile = {
-    title: 'Untitled',
-    author: 'Anonymous',
-    created: new Date().toISOString(),
-    version: '1.0.0',
-    body: '',
-    attachments: [],
-};
+export const DAM_VERSION = '2.0.0';
+export const DAM_MIME = 'application/x-dam';
+
+export function createDefaultDamFile(): DamFile {
+    const now = new Date().toISOString();
+    return {
+        title: 'Untitled',
+        author: 'Anonymous',
+        created: now,
+        modified: now,
+        version: DAM_VERSION,
+        tags: [],
+        description: '',
+        body: '',
+        checksum: '',
+        encrypted: false,
+        attachments: [],
+        history: [
+            { timestamp: now, action: 'created', summary: 'File created' },
+        ],
+    };
+}
+
+// ── Compression helpers ──
+
+function compressBase64(raw: string): string {
+    const bytes = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
+    const compressed = deflate(bytes);
+    return btoa(String.fromCharCode(...Array.from(compressed)));
+}
+
+function decompressBase64(compressed: string): string {
+    const bytes = Uint8Array.from(atob(compressed), (c) => c.charCodeAt(0));
+    const decompressed = inflate(bytes);
+    return btoa(String.fromCharCode(...Array.from(decompressed)));
+}
+
+// ── Attachment checksum ──
+
+export async function computeAttachmentChecksum(data: string): Promise<string> {
+    return sha256(data);
+}
+
+// ── Serialize ──
 
 /**
- * Serialize a DamFile into the .dam text format.
+ * .dam v2 format:
  *
- * When opened in any text editor, it looks like:
- *
- * ===DAM v1.0===
+ * ===DAM v2.0===
  * title: My Document
  * author: Jane
  * created: 2024-06-15T12:00:00.000Z
+ * modified: 2024-06-16T09:00:00.000Z
+ * tags: notes, project, draft
+ * description: My project notes
+ * checksum: a1b2c3d4...
+ * encrypted: no
  * ==============
  *
- * This is my actual content.
- * It appears exactly as I typed it.
+ * Your actual written content appears here.
  *
+ * ===HISTORY===
+ * [2024-06-15T12:00:00.000Z|created] File created
+ * [2024-06-16T09:00:00.000Z|edited] Body updated
  * ===ATTACHMENTS===
- * [photo.jpg|image/jpeg|4523]
- * /9j/4AAQSkZJRgABAQ...
- * [notes.pdf|application/pdf|89201]
- * JVBERi0xLjQK...
+ * [photo.jpg|image/jpeg|45230|compressed|sha256:abc123...]
+ * eJzLSM3J...  (gzipped base64)
  * ===END===
  */
-export function serializeDam(file: DamFile): string {
+export async function serializeDam(file: DamFile): Promise<string> {
     const lines: string[] = [];
 
-    lines.push('===DAM v1.0===');
+    // Compute body checksum
+    const bodyChecksum = await sha256(file.body);
+
+    lines.push('===DAM v2.0===');
     lines.push(`title: ${file.title}`);
     lines.push(`author: ${file.author}`);
     lines.push(`created: ${file.created}`);
+    lines.push(`modified: ${new Date().toISOString()}`);
+    if (file.tags.length > 0) {
+        lines.push(`tags: ${file.tags.join(', ')}`);
+    }
+    if (file.description) {
+        lines.push(`description: ${file.description}`);
+    }
+    lines.push(`checksum: ${bodyChecksum}`);
+    lines.push(`encrypted: ${file.encrypted ? 'yes' : 'no'}`);
     lines.push('==============');
     lines.push('');
     lines.push(file.body);
 
-    if (file.attachments.length > 0) {
+    // History
+    if (file.history.length > 0) {
         lines.push('');
+        lines.push('===HISTORY===');
+        for (const entry of file.history) {
+            lines.push(`[${entry.timestamp}|${entry.action}] ${entry.summary}`);
+        }
+    }
+
+    // Attachments
+    if (file.attachments.length > 0) {
         lines.push('===ATTACHMENTS===');
         for (const att of file.attachments) {
-            lines.push(`[${att.name}|${att.type}|${att.size}]`);
-            lines.push(att.data);
+            let data = att.data;
+            let isCompressed = att.compressed;
+
+            // Compress if not already and data is large enough
+            if (!isCompressed && att.data.length > 1024) {
+                try {
+                    const compressed = compressBase64(att.data);
+                    if (compressed.length < att.data.length * 0.9) {
+                        data = compressed;
+                        isCompressed = true;
+                    }
+                } catch {
+                    // compression failed, use raw
+                }
+            }
+
+            const compFlag = isCompressed ? 'compressed' : 'raw';
+            lines.push(
+                `[${att.name}|${att.type}|${att.size}|${compFlag}|sha256:${att.checksum}]`,
+            );
+            lines.push(data);
         }
         lines.push('===END===');
     }
@@ -68,26 +166,49 @@ export function serializeDam(file: DamFile): string {
     return lines.join('\n');
 }
 
-/**
- * Parse a .dam text file back into a DamFile object.
- */
+// ── Parse ──
+
 export function parseDam(raw: string): DamFile | null {
     const lines = raw.split('\n');
 
     if (!lines[0]?.startsWith('===DAM')) return null;
 
-    const file: DamFile = {
-        title: 'Untitled',
-        author: 'Anonymous',
-        created: new Date().toISOString(),
-        version: '1.0.0',
-        body: '',
-        attachments: [],
-    };
+    const file = createDefaultDamFile();
+    file.history = [];
 
-    let section: 'header' | 'body' | 'attachments' = 'header';
+    let section: 'header' | 'body' | 'history' | 'attachments' = 'header';
     const bodyLines: string[] = [];
-    let currentAttachment: Partial<DamAttachment> | null = null;
+    let currentAttachment: {
+        name: string;
+        type: string;
+        size: number;
+        compressed: boolean;
+        checksum: string;
+        dataLines: string[];
+    } | null = null;
+
+    function flushAttachment() {
+        if (!currentAttachment) return;
+        let data = currentAttachment.dataLines.join('');
+
+        if (currentAttachment.compressed) {
+            try {
+                data = decompressBase64(data);
+            } catch {
+                // decompression failed, keep raw
+            }
+        }
+
+        file.attachments.push({
+            name: currentAttachment.name,
+            type: currentAttachment.type,
+            size: currentAttachment.size,
+            checksum: currentAttachment.checksum,
+            compressed: false, // stored decompressed in memory
+            data,
+        });
+        currentAttachment = null;
+    }
 
     for (let i = 1; i < lines.length; i++) {
         const line = lines[i];
@@ -102,9 +223,23 @@ export function parseDam(raw: string): DamFile | null {
                 const key = line.substring(0, colonIdx).trim();
                 const val = line.substring(colonIdx + 2).trim();
                 if (key === 'title') file.title = val;
-                if (key === 'author') file.author = val;
-                if (key === 'created') file.created = val;
+                else if (key === 'author') file.author = val;
+                else if (key === 'created') file.created = val;
+                else if (key === 'modified') file.modified = val;
+                else if (key === 'tags')
+                    file.tags = val
+                        .split(',')
+                        .map((t) => t.trim())
+                        .filter(Boolean);
+                else if (key === 'description') file.description = val;
+                else if (key === 'checksum') file.checksum = val;
+                else if (key === 'encrypted') file.encrypted = val === 'yes';
             }
+            continue;
+        }
+
+        if (line === '===HISTORY===') {
+            section = 'history';
             continue;
         }
 
@@ -114,9 +249,7 @@ export function parseDam(raw: string): DamFile | null {
         }
 
         if (line === '===END===') {
-            if (currentAttachment?.name && currentAttachment.data) {
-                file.attachments.push(currentAttachment as DamAttachment);
-            }
+            flushAttachment();
             break;
         }
 
@@ -125,29 +258,47 @@ export function parseDam(raw: string): DamFile | null {
             continue;
         }
 
-        if (section === 'attachments') {
-            const match = line.match(/^\[(.+?)\|(.+?)\|(\d+)]$/);
+        if (section === 'history') {
+            const match = line.match(/^\[(.+?)\|(.+?)] (.+)$/);
             if (match) {
-                if (currentAttachment?.name && currentAttachment.data) {
-                    file.attachments.push(currentAttachment as DamAttachment);
-                }
+                file.history.push({
+                    timestamp: match[1],
+                    action: match[2],
+                    summary: match[3],
+                });
+            }
+            continue;
+        }
+
+        if (section === 'attachments') {
+            // v2: [name|type|size|compressed/raw|sha256:hash]
+            const matchV2 = line.match(
+                /^\[(.+?)\|(.+?)\|(\d+)\|(compressed|raw)\|sha256:([a-f0-9]+)]$/,
+            );
+            // v1 compat: [name|type|size]
+            const matchV1 = line.match(/^\[(.+?)\|(.+?)\|(\d+)]$/);
+
+            const m = matchV2 || matchV1;
+            if (m) {
+                flushAttachment();
                 currentAttachment = {
-                    name: match[1],
-                    type: match[2],
-                    size: parseInt(match[3], 10),
-                    data: '',
+                    name: m[1],
+                    type: m[2],
+                    size: parseInt(m[3], 10),
+                    compressed: matchV2 ? m[4] === 'compressed' : false,
+                    checksum: matchV2 ? m[5] : '',
+                    dataLines: [],
                 };
             } else if (currentAttachment) {
-                currentAttachment.data = (currentAttachment.data || '') + line;
+                currentAttachment.dataLines.push(line);
             }
         }
     }
 
-    // Trim trailing blank lines that were before ===ATTACHMENTS===
+    // Trim body
     while (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === '') {
         bodyLines.pop();
     }
-    // Also trim the leading blank line after header
     while (bodyLines.length > 0 && bodyLines[0] === '') {
         bodyLines.shift();
     }
