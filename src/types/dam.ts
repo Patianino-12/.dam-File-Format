@@ -58,16 +58,29 @@ export function createDefaultDamFile(): DamFile {
 
 // ── Compression helpers ──
 
+function strToBytes(str: string): Uint8Array {
+    const arr = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) arr[i] = str.charCodeAt(i);
+    return arr;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++)
+        binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+}
+
 function compressBase64(raw: string): string {
-    const bytes = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
+    const bytes = strToBytes(atob(raw));
     const compressed = deflate(bytes);
-    return btoa(String.fromCharCode(...Array.from(compressed)));
+    return bytesToBase64(compressed);
 }
 
 function decompressBase64(compressed: string): string {
-    const bytes = Uint8Array.from(atob(compressed), (c) => c.charCodeAt(0));
+    const bytes = strToBytes(atob(compressed));
     const decompressed = inflate(bytes);
-    return btoa(String.fromCharCode(...Array.from(decompressed)));
+    return bytesToBase64(decompressed);
 }
 
 // ── Attachment checksum ──
