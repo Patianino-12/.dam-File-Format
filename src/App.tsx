@@ -20,6 +20,11 @@ import { DEFAULT_DAM_FILE, serializeDam, parseDam } from './types/dam.ts';
 import { clsx } from 'clsx';
 import type { ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import {
+    containsProfanity,
+    findProfanity,
+    censorText,
+} from './utils/profanity.ts';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -131,11 +136,45 @@ export default function App() {
     const [previewAttachment, setPreviewAttachment] =
         useState<DamAttachment | null>(null);
     const [isDragging, setIsDragging] = useState(false);
+    const [warnings, setWarnings] = useState<Record<string, string>>({});
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const attachInputRef = useRef<HTMLInputElement>(null);
 
+    const validateField = (field: string, value: string): boolean => {
+        const bad = findProfanity(value);
+        if (bad.length > 0) {
+            setWarnings((prev) => ({
+                ...prev,
+                [field]: `Contains inappropriate language: ${bad.map((w) => censorText(w)).join(', ')}`,
+            }));
+            return false;
+        }
+        setWarnings((prev) => {
+            const next = { ...prev };
+            delete next[field];
+            return next;
+        });
+        return true;
+    };
+
+    const updateField = (field: keyof DamFile, value: string): void => {
+        validateField(field, value);
+        setDamFile((p) => ({ ...p, [field]: value }));
+    };
+
+    const canSave =
+        !containsProfanity(damFile.title) &&
+        !containsProfanity(damFile.author) &&
+        !containsProfanity(damFile.body);
+
     const handleDownload = (): void => {
+        if (!canSave) {
+            alert(
+                'Your file contains inappropriate language in the title, author, or content. Please remove it before saving.',
+            );
+            return;
+        }
         const output = serializeDam(damFile);
         const blob = new Blob([output], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
@@ -248,14 +287,21 @@ export default function App() {
                         <input
                             value={damFile.title}
                             onChange={(e) =>
-                                setDamFile((p) => ({
-                                    ...p,
-                                    title: e.target.value,
-                                }))
+                                updateField('title', e.target.value)
                             }
                             placeholder="My Document"
-                            className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all"
+                            className={cn(
+                                'w-full bg-neutral-950 border rounded-lg px-3 py-2 outline-none transition-all',
+                                warnings.title
+                                    ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/40'
+                                    : 'border-neutral-800 focus:ring-2 focus:ring-indigo-500/50',
+                            )}
                         />
+                        {warnings.title && (
+                            <p className="text-xs text-red-400 flex items-center gap-1 mt-1">
+                                <span>⚠</span> {warnings.title}
+                            </p>
+                        )}
                     </div>
                     <div className="space-y-1.5">
                         <label className="text-xs uppercase tracking-wider text-neutral-500 font-bold">
@@ -264,30 +310,47 @@ export default function App() {
                         <input
                             value={damFile.author}
                             onChange={(e) =>
-                                setDamFile((p) => ({
-                                    ...p,
-                                    author: e.target.value,
-                                }))
+                                updateField('author', e.target.value)
                             }
                             placeholder="Your name"
-                            className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all"
+                            className={cn(
+                                'w-full bg-neutral-950 border rounded-lg px-3 py-2 outline-none transition-all',
+                                warnings.author
+                                    ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/40'
+                                    : 'border-neutral-800 focus:ring-2 focus:ring-indigo-500/50',
+                            )}
                         />
+                        {warnings.author && (
+                            <p className="text-xs text-red-400 flex items-center gap-1 mt-1">
+                                <span>⚠</span> {warnings.author}
+                            </p>
+                        )}
                     </div>
                 </div>
             </section>
 
             {/* Body / Main Content */}
             <section className="bg-neutral-900 rounded-2xl border border-neutral-800 p-6">
-                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                    <FileCode className="w-5 h-5 text-indigo-400" /> Content
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold flex items-center gap-2">
+                        <FileCode className="w-5 h-5 text-indigo-400" /> Content
+                    </h2>
+                    {warnings.body && (
+                        <span className="text-xs text-red-400 flex items-center gap-1">
+                            <span>⚠</span> Inappropriate language detected
+                        </span>
+                    )}
+                </div>
                 <textarea
                     value={damFile.body}
-                    onChange={(e) =>
-                        setDamFile((p) => ({ ...p, body: e.target.value }))
-                    }
+                    onChange={(e) => updateField('body', e.target.value)}
                     placeholder="Write anything here — this is exactly what appears when you open the .dam file..."
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 min-h-[240px] focus:ring-2 focus:ring-indigo-500/50 outline-none transition-all resize-y font-mono text-sm leading-relaxed"
+                    className={cn(
+                        'w-full bg-neutral-950 border rounded-xl px-4 py-3 min-h-[240px] outline-none transition-all resize-y font-mono text-sm leading-relaxed',
+                        warnings.body
+                            ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/40'
+                            : 'border-neutral-800 focus:ring-2 focus:ring-indigo-500/50',
+                    )}
                 />
             </section>
 
@@ -588,7 +651,18 @@ export default function App() {
                         />
                         <button
                             onClick={handleDownload}
-                            className="flex items-center gap-2 px-4 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 transition-colors text-sm font-medium shadow-lg shadow-indigo-900/20"
+                            disabled={!canSave}
+                            className={cn(
+                                'flex items-center gap-2 px-4 py-1.5 rounded-md transition-colors text-sm font-medium shadow-lg',
+                                canSave
+                                    ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/20'
+                                    : 'bg-neutral-700 text-neutral-400 cursor-not-allowed shadow-none',
+                            )}
+                            title={
+                                canSave
+                                    ? 'Save as .dam file'
+                                    : 'Remove inappropriate language to save'
+                            }
                         >
                             <Download className="w-4 h-4" /> Save .dam
                         </button>
@@ -636,23 +710,48 @@ export default function App() {
                     </div>
 
                     <aside className="space-y-6">
-                        <div className="bg-indigo-600 rounded-2xl p-6 text-white overflow-hidden relative group">
+                        <div
+                            className={cn(
+                                'rounded-2xl p-6 text-white overflow-hidden relative group',
+                                canSave
+                                    ? 'bg-indigo-600'
+                                    : 'bg-neutral-800 border border-red-500/30',
+                            )}
+                        >
                             <div className="relative z-10">
                                 <h3 className="font-bold text-xl mb-1">
-                                    Save as .dam
+                                    {canSave ? 'Save as .dam' : '⚠ Cannot Save'}
                                 </h3>
-                                <p className="text-indigo-100 text-sm mb-4">
-                                    Your content + attachments bundled into one
-                                    portable file.
+                                <p
+                                    className={cn(
+                                        'text-sm mb-4',
+                                        canSave
+                                            ? 'text-indigo-100'
+                                            : 'text-red-300',
+                                    )}
+                                >
+                                    {canSave
+                                        ? 'Your content + attachments bundled into one portable file.'
+                                        : 'Remove inappropriate language from your title, author, or content to save.'}
                                 </p>
                                 <button
                                     onClick={handleDownload}
-                                    className="w-full py-2.5 bg-white text-indigo-600 rounded-xl font-bold text-sm shadow-xl active:scale-95 transition-transform"
+                                    disabled={!canSave}
+                                    className={cn(
+                                        'w-full py-2.5 rounded-xl font-bold text-sm shadow-xl transition-transform',
+                                        canSave
+                                            ? 'bg-white text-indigo-600 active:scale-95'
+                                            : 'bg-neutral-700 text-neutral-400 cursor-not-allowed',
+                                    )}
                                 >
-                                    Download .dam
+                                    {canSave
+                                        ? 'Download .dam'
+                                        : 'Fix issues to save'}
                                 </button>
                             </div>
-                            <Zap className="absolute -bottom-4 -right-4 w-32 h-32 text-indigo-500 opacity-20 group-hover:scale-110 transition-transform" />
+                            {canSave && (
+                                <Zap className="absolute -bottom-4 -right-4 w-32 h-32 text-indigo-500 opacity-20 group-hover:scale-110 transition-transform" />
+                            )}
                         </div>
 
                         <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6">
