@@ -31,6 +31,90 @@ function formatBytes(bytes: number): string {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+function getMimeType(fileName: string, browserType: string): string {
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const map: Record<string, string> = {
+        // Images
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        gif: 'image/gif',
+        webp: 'image/webp',
+        svg: 'image/svg+xml',
+        ico: 'image/x-icon',
+        bmp: 'image/bmp',
+        // Documents
+        pdf: 'application/pdf',
+        doc: 'application/msword',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        xls: 'application/vnd.ms-excel',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ppt: 'application/vnd.ms-powerpoint',
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        // Text / Code
+        txt: 'text/plain',
+        md: 'text/markdown',
+        html: 'text/html',
+        htm: 'text/html',
+        css: 'text/css',
+        js: 'text/javascript',
+        ts: 'text/typescript',
+        tsx: 'text/typescript',
+        jsx: 'text/javascript',
+        json: 'application/json',
+        xml: 'text/xml',
+        csv: 'text/csv',
+        yaml: 'text/yaml',
+        yml: 'text/yaml',
+        py: 'text/x-python',
+        rb: 'text/x-ruby',
+        go: 'text/x-go',
+        rs: 'text/x-rust',
+        java: 'text/x-java',
+        c: 'text/x-c',
+        cpp: 'text/x-c++',
+        h: 'text/x-c',
+        sh: 'text/x-shellscript',
+        bat: 'text/x-batch',
+        sql: 'text/x-sql',
+        // Archives
+        zip: 'application/zip',
+        tar: 'application/x-tar',
+        gz: 'application/gzip',
+        rar: 'application/vnd.rar',
+        '7z': 'application/x-7z-compressed',
+        // Audio
+        mp3: 'audio/mpeg',
+        wav: 'audio/wav',
+        ogg: 'audio/ogg',
+        flac: 'audio/flac',
+        // Video
+        mp4: 'video/mp4',
+        webm: 'video/webm',
+        avi: 'video/x-msvideo',
+        mov: 'video/quicktime',
+        // Fonts
+        woff: 'font/woff',
+        woff2: 'font/woff2',
+        ttf: 'font/ttf',
+        otf: 'font/otf',
+    };
+    return (
+        map[ext] ||
+        (browserType && browserType !== 'application/octet-stream'
+            ? browserType
+            : 'application/octet-stream')
+    );
+}
+
+function isTextMime(type: string): boolean {
+    return (
+        type.startsWith('text/') ||
+        type === 'application/json' ||
+        type === 'application/xml'
+    );
+}
+
 function getFileIcon(type: string) {
     if (type.startsWith('image/')) return Image;
     return File;
@@ -98,9 +182,10 @@ export default function App() {
                 if (typeof dataUrl !== 'string') return;
                 // strip the data:...;base64, prefix
                 const base64 = dataUrl.split(',')[1] || '';
+                const correctedType = getMimeType(file.name, file.type);
                 const attachment: DamAttachment = {
                     name: file.name,
-                    type: file.type || 'application/octet-stream',
+                    type: correctedType,
                     data: base64,
                     size: file.size,
                 };
@@ -256,50 +341,79 @@ export default function App() {
                         {damFile.attachments.map((att, i) => {
                             const Icon = getFileIcon(att.type);
                             const isImage = att.type.startsWith('image/');
+                            const isText = isTextMime(att.type);
                             return (
                                 <div
                                     key={`${att.name}-${i}`}
-                                    className="flex items-center gap-3 bg-neutral-950 rounded-lg px-3 py-2 group"
+                                    className="bg-neutral-950 rounded-lg overflow-hidden"
                                 >
-                                    {isImage ? (
-                                        <img
-                                            src={`data:${att.type};base64,${att.data}`}
-                                            alt={att.name}
-                                            className="w-10 h-10 rounded object-cover border border-neutral-800"
-                                        />
-                                    ) : (
-                                        <div className="w-10 h-10 rounded bg-neutral-800 flex items-center justify-center">
-                                            <Icon className="w-5 h-5 text-neutral-400" />
+                                    <div className="flex items-center gap-3 px-3 py-2">
+                                        {isImage ? (
+                                            <img
+                                                src={`data:${att.type};base64,${att.data}`}
+                                                alt={att.name}
+                                                className="w-10 h-10 rounded object-cover border border-neutral-800"
+                                            />
+                                        ) : (
+                                            <div className="w-10 h-10 rounded bg-neutral-800 flex items-center justify-center shrink-0">
+                                                <Icon className="w-5 h-5 text-neutral-400" />
+                                            </div>
+                                        )}
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm text-neutral-200 truncate">
+                                                {att.name}
+                                            </p>
+                                            <p className="text-xs text-neutral-500">
+                                                {att.type} &middot;{' '}
+                                                {formatBytes(att.size)}
+                                            </p>
                                         </div>
-                                    )}
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm text-neutral-200 truncate">
-                                            {att.name}
-                                        </p>
-                                        <p className="text-xs text-neutral-500">
-                                            {att.type} &middot;{' '}
-                                            {formatBytes(att.size)}
-                                        </p>
-                                    </div>
-                                    {isImage && (
+                                        {(isImage || isText) && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setPreviewAttachment(att);
+                                                }}
+                                                className="p-1.5 text-neutral-500 hover:text-indigo-400 transition-colors"
+                                                title="Preview"
+                                            >
+                                                <Eye className="w-4 h-4" />
+                                            </button>
+                                        )}
                                         <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                setPreviewAttachment(att);
+                                            onClick={() => {
+                                                const blob = new Blob(
+                                                    [
+                                                        Uint8Array.from(
+                                                            atob(att.data),
+                                                            (c) =>
+                                                                c.charCodeAt(0),
+                                                        ),
+                                                    ],
+                                                    { type: att.type },
+                                                );
+                                                const url =
+                                                    URL.createObjectURL(blob);
+                                                const a =
+                                                    document.createElement('a');
+                                                a.href = url;
+                                                a.download = att.name;
+                                                a.click();
+                                                URL.revokeObjectURL(url);
                                             }}
                                             className="p-1.5 text-neutral-500 hover:text-indigo-400 transition-colors"
-                                            title="Preview"
+                                            title="Download original"
                                         >
-                                            <Eye className="w-4 h-4" />
+                                            <Download className="w-4 h-4" />
                                         </button>
-                                    )}
-                                    <button
-                                        onClick={() => removeAttachment(i)}
-                                        className="p-1.5 text-neutral-500 hover:text-red-400 transition-colors"
-                                        title="Remove"
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
+                                        <button
+                                            onClick={() => removeAttachment(i)}
+                                            className="p-1.5 text-neutral-500 hover:text-red-400 transition-colors"
+                                            title="Remove"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
                                 </div>
                             );
                         })}
@@ -400,14 +514,14 @@ export default function App() {
 
     return (
         <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans selection:bg-indigo-500/30">
-            {/* Image Preview Modal */}
+            {/* Attachment Preview Modal */}
             {previewAttachment && (
                 <div
                     className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
                     onClick={() => setPreviewAttachment(null)}
                 >
                     <div
-                        className="relative max-w-3xl max-h-[80vh]"
+                        className="relative max-w-3xl w-full max-h-[80vh]"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <button
@@ -416,11 +530,24 @@ export default function App() {
                         >
                             <X className="w-4 h-4" />
                         </button>
-                        <img
-                            src={`data:${previewAttachment.type};base64,${previewAttachment.data}`}
-                            alt={previewAttachment.name}
-                            className="max-w-full max-h-[80vh] rounded-xl border border-neutral-700 object-contain"
-                        />
+                        {previewAttachment.type.startsWith('image/') ? (
+                            <img
+                                src={`data:${previewAttachment.type};base64,${previewAttachment.data}`}
+                                alt={previewAttachment.name}
+                                className="max-w-full max-h-[75vh] rounded-xl border border-neutral-700 object-contain mx-auto"
+                            />
+                        ) : isTextMime(previewAttachment.type) ? (
+                            <pre className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 text-sm text-neutral-300 font-mono overflow-auto max-h-[75vh] whitespace-pre-wrap">
+                                {atob(previewAttachment.data)}
+                            </pre>
+                        ) : (
+                            <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-12 text-center">
+                                <File className="w-16 h-16 text-neutral-600 mx-auto mb-4" />
+                                <p className="text-neutral-400">
+                                    Preview not available for this file type.
+                                </p>
+                            </div>
+                        )}
                         <p className="text-center text-sm text-neutral-400 mt-3">
                             {previewAttachment.name} &middot;{' '}
                             {formatBytes(previewAttachment.size)}
